@@ -1,0 +1,17 @@
+# dependencies
+node_modules/
+
+# logs and local state
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# editor and OS noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+# verification scratch
+scratch/

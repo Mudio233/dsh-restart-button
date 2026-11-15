@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Restart Harness",
+    "description": "Adds a Restart DSH control beside Settings in the sidebar foot. It shows the running version, asks for confirmation, then restarts the host through a detached launcher and reloads the page when the new process answers.",
+    "detail": "docs/DETAIL.md"
+  }
+}
