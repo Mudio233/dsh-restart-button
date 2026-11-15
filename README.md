@@ -2,7 +2,7 @@
 
 A DeepSeek Harness (DSH) plugin: a **Restart DSH** control in the sidebar footer. It shows the running version, asks for confirmation, restarts the host through a launcher that outlives the process it kills, and reloads the page when the new host answers.
 
-![icon](icon.svg)
+![The Restart DSH action in the sidebar footer, with its confirmation panel open](docs/preview.png)
 
 DeepSeek Harness 插件：在侧边栏底部加一个「重启 DSH」按钮。显示当前版本，二次确认后重启宿主，新进程应答后页面自动重新加载。
 
@@ -24,12 +24,20 @@ It also does the part that a naive implementation gets wrong: a process cannot r
 
 ## Install
 
-The bundle is a plain package with no dependencies or build step.
+The bundle is a plain package with no dependencies or build step, and it is also published as a packaged
+bundle on the [releases page](https://github.com/Mudio233/dsh-restart-button/releases).
 
-1. Clone this repository somewhere.
-2. In DSH, open **Plugins** → **Add plugin** → choose the local directory, or call the Plugin Manager with
-   `install_bundle` and the absolute package directory as the target.
-3. The row appears immediately; the button shows up in the sidebar footer (a page refresh may be needed to pick up the client half).
+**From a release.** In DSH open **Plugins** → **Add plugin** and paste:
+
+```
+https://github.com/Mudio233/dsh-restart-button/releases/latest/download/dsh-restart-button.tgz
+```
+
+**From source.** Clone the repository, then point **Add plugin** at the directory — or call the Plugin
+Manager with `install_bundle` and the absolute package directory as the target.
+
+Either way the row appears immediately; the button shows up in the sidebar footer (a page refresh may be
+needed to pick up the client half).
 
 Compatibility: developed and verified against DSH `0.2.2-rc.3` on Windows. The Host half uses `webServer` and (when present) `connection`; the Client half uses `slots` and `locale`.
 

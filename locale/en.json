@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "Restart Harness",
-    "description": "Adds a Restart DSH control beside Settings in the sidebar foot. It shows the running version, asks for confirmation, then restarts the host through a detached launcher and reloads the page when the new process answers.",
+    "description": "Adds a Restart DSH action to the sidebar footer, beside Settings, showing the running version. One press asks for confirmation, then a detached launcher ends the whole client and starts it again within about two seconds; session logs are already persisted, so reopened sessions keep their history. The panel can be closed at any time and shows the launcher log path if the window does not come back. Windows desktop only; a restart leaves the page at the old address, so the returning window is the way back.",
     "detail": "docs/DETAIL.md"
   }
 }

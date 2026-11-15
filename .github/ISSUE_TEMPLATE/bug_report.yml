@@ -1,0 +1,44 @@
+name: Bug report
+description: The button, its panel, or the restart itself did not behave
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Remove personal paths and any token from what you paste.
+  - type: input
+    id: dsh-version
+    attributes:
+      label: DSH version
+      description: Shown on the button's row, for example `v0.2.2-rc.3`.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: System and DSH mode
+      description: For example `Windows 11, desktop app` or `dsh web`.
+    validations:
+      required: true
+  - type: textarea
+    id: happened
+    attributes:
+      label: What happened
+      description: |
+        What you clicked, and what you saw. A restart closes the window, so say
+        whether a new window appeared and roughly how long it took.
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Launcher log
+      description: When the window did not come back, paste `%TEMP%\dsh-restart.log`.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before filing
+      options:
+        - label: I read the limits in the README (the page keeps the old address after a restart).
+          required: true
