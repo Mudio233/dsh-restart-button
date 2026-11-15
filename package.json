@@ -1,7 +1,6 @@
 {
-  "name": "@local/dsh-restart-button",
+  "name": "dsh-restart-button",
   "version": "1.0.0",
-  "private": true,
   "type": "module",
   "license": "MIT",
   "description": "Sidebar control that restarts the DeepSeek Harness host after a confirmation and reloads the page when the new host answers.",
