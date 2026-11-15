@@ -62,10 +62,15 @@ The restart is not performed inline. The Host builds a launcher and starts it wi
 
 - **Windows** — PowerShell behind one `cmd` hop, with the script as base64 of UTF-16 (`-EncodedCommand`). A `.cmd` file is read through a console codepage, which mangles an install path containing non-ASCII characters; an argument does not go through that path. The hop also survives the termination that follows, where a directly spawned PowerShell child did not in testing.
 - **POSIX** — a `/bin/sh` script started detached.
+- **The Windows script body is a file, not code.** `launcher.windows.ps1` is read on every restart, so a launcher fix applies without restarting the Host. It has to stay small: the payload travels inside one `cmd` command line, whose limit is 8191 characters, and UTF-16 base64 costs 2.67 characters per source character. Comments are stripped before sending, and a payload that no longer fits is reported instead of failing silently.
+- **Node mode is cleared before starting the shell.** The Host is the same executable running in Electron's Node mode, so its environment carries `ELECTRON_RUN_AS_NODE`. A child started with that variable runs as a windowless Node and exits at once — the failure looks like "nothing happened". The launcher removes it before `Start-Process`.
+
 
 The launcher waits, then `Get-Process | Where-Object { $_.Path -eq '<exe>' } | Stop-Process -Force`, waits, `Start-Process` the same executable, and retries once after eight seconds.
 
 Nothing here kills by image name, so a second install of a different executable is left alone.
+
+Every launcher step is appended to `%TEMP%\\dsh-restart.log`; the confirmation panel shows that path when a restart does not come back, which is the only evidence available once the window is gone.
 
 ## Limits
 

@@ -10,13 +10,16 @@ window.__ModuleLoader__.load({
     /** How often the page asks whether a new host answered. */
     const POLL_MS = 2000
     /** How long the page waits before it admits the reconnect failed. */
-    const POLL_LIMIT_MS = 120000
+    const POLL_LIMIT_MS = 20000
+    /** A hung POST must not leave the panel spinning forever. */
+    const REQUEST_TIMEOUT_MS = 8000
 
     const CSS = `
 .drsb-layer { position: relative; flex: none; display: flex; align-items: center; width: auto; height: 40px; margin: 0 0 0 auto; }
 .drsb-button { display: inline-flex; align-items: center; gap: 8px; width: auto; height: 34px; margin: 0; padding: 0 12px 0 9px; border: none; border-radius: 12px; background: transparent; color: var(--dsw-alias-label-primary); font-family: inherit; font-size: 14px; line-height: 20px; cursor: pointer; overflow: hidden; text-align: left; }
 @media (hover: hover) { .drsb-button:hover { background: var(--dsw-alias-interactive-bg-hover, var(--dsw-alias-bg-layer-2)); } }
 .drsb-button:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
+.drsb-button[data-open] { background: var(--dsw-alias-interactive-bg-hover, var(--dsw-alias-bg-layer-2)); }
 .drsb-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .drsb-version { flex: none; margin-left: 2px; color: var(--dsw-alias-label-secondary); font-size: 11px; line-height: 16px; font-variant-numeric: tabular-nums; }
 .drsb-icon { flex: none; display: block; }
@@ -35,6 +38,7 @@ window.__ModuleLoader__.load({
 .drsb-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--dsw-alias-state-warn-primary); animation: drsb-pulse 1.2s ease-in-out infinite; }
 @keyframes drsb-pulse { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
 .drsb-error { color: var(--dsw-alias-state-error-primary); font-size: 12px; line-height: 1.6; }
+.drsb-log { margin: 8px 0 0; color: var(--dsw-alias-label-secondary); font-size: 11px; line-height: 1.5; word-break: break-all; }
 `
 
     /** Chinese dictionaries; the English half mirrors every key. */
@@ -46,10 +50,11 @@ window.__ModuleLoader__.load({
       confirm: '重启',
       cancel: '取消',
       running: '正在重启宿主…',
-      runningHint: '页面会自动重连，通常需要几十秒。',
-      timeout: '没能自动重连。如果端口已经变化，请回到桌面窗口，或重新打开 Web GUI。',
+      runningHint: '窗口会在几秒内重新打开，会话不会丢。',
+      timeout: '没能自动重连。桌面版重启会换端口，旧页面不会再连上；新窗口没出现，就看下面的日志。',
       reload: '重新加载页面',
       error: '重启请求失败：{message}',
+      logHint: '诊断日志：{path}',
       versionFact: '当前版本 v{version}',
       versionUnknown: '版本未知',
       pidFact: '进程 {pid}',
@@ -62,10 +67,11 @@ window.__ModuleLoader__.load({
       confirm: 'Restart',
       cancel: 'Cancel',
       running: 'Restarting the host…',
-      runningHint: 'The page reconnects on its own; this usually takes tens of seconds.',
-      timeout: 'Automatic reconnect failed. If the port changed, return to the desktop window or reopen the Web GUI.',
+      runningHint: 'The window reopens within a few seconds; sessions are kept.',
+      timeout: 'Automatic reconnect failed: a desktop restart picks a new port, so this page never comes back. If no new window appeared, the log below says why.',
       reload: 'Reload the page',
       error: 'The restart request failed: {message}',
+      logHint: 'Diagnostic log: {path}',
       versionFact: 'Version v{version}',
       versionUnknown: 'Version unknown',
       pidFact: 'Process {pid}',
@@ -137,14 +143,20 @@ window.__ModuleLoader__.load({
         return () => { cancelled = true }
       }, [])
 
-      // Anchor the panel above the button; it opens leftward from the right edge.
+      // Place the panel above the button, clamped into the viewport. The slot
+      // wraps every entry in a `display: contents` element, so a parent box is
+      // not measurable; measure this layer, whose box is the button itself.
       const open = phase !== 'idle'
       React.useLayoutEffect(() => {
         if (!open) return undefined
         const place = () => {
-          const rect = rootRef.current?.getBoundingClientRect()
-          if (rect === undefined) return
-          setAnchor({ right: Math.max(8, window.innerWidth - rect.right), bottom: window.innerHeight - rect.top + 8 })
+          const root = rootRef.current
+          if (root === null) return
+          const rect = root.getBoundingClientRect()
+          const viewportWidth = window.innerWidth
+          const width = Math.max(220, Math.min(268, viewportWidth - 24))
+          const left = Math.max(8, Math.min(rect.right - width, viewportWidth - width - 8))
+          setAnchor({ left, width, bottom: window.innerHeight - rect.top + 8 })
         }
         place()
         window.addEventListener('resize', place)
@@ -153,7 +165,8 @@ window.__ModuleLoader__.load({
 
       // Dismiss on an outside pointer or Escape, never while the restart runs.
       React.useEffect(() => {
-        if (phase !== 'confirm' && phase !== 'error') return undefined
+        // Closing the panel never cancels an accepted restart; it only hides it.
+        if (!open) return undefined
         const onPointer = (event) => {
           const root = rootRef.current
           if (root !== null && event.target instanceof Node && root.contains(event.target)) return
@@ -166,7 +179,7 @@ window.__ModuleLoader__.load({
           document.removeEventListener('pointerdown', onPointer, true)
           document.removeEventListener('keydown', onKey)
         }
-      }, [phase])
+      }, [open])
 
       // Poll until a host with a different pid answers, then reload.
       React.useEffect(() => {
@@ -208,11 +221,14 @@ window.__ModuleLoader__.load({
       const request = async () => {
         setFailure('')
         setPhase('restarting')
+        const controller = new AbortController()
+        const deadline = window.setTimeout(() => { controller.abort() }, REQUEST_TIMEOUT_MS)
         try {
           const response = await fetch(route(RESTART_PATH), {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ confirm: true }),
+            signal: controller.signal,
           })
           const body = await response.json().catch(() => undefined)
           if (!response.ok || body === undefined || body.ok !== true) {
@@ -222,8 +238,12 @@ window.__ModuleLoader__.load({
           }
           if (typeof body.pid === 'number') seenPid.current = body.pid
         } catch (error) {
-          setFailure(error instanceof Error ? error.message : String(error))
+          setFailure(error instanceof Error && error.name === 'AbortError'
+            ? 'no response within 8s'
+            : error instanceof Error ? error.message : String(error))
           setPhase('error')
+        } finally {
+          window.clearTimeout(deadline)
         }
       }
 
@@ -239,12 +259,20 @@ window.__ModuleLoader__.load({
               h('span', { className: 'drsb-dot', 'aria-hidden': true }),
               t('running')),
             h('p', { key: 'hint', className: 'drsb-body', style: { margin: '8px 0 0' } }, t('runningHint')),
+            h('div', { key: 'actions', className: 'drsb-actions', style: { marginTop: '10px' } },
+              h('button', {
+                type: 'button', className: 'drsb-secondary',
+                onClick: () => { setPhase('idle') },
+              }, t('cancel'))),
           ]
         }
         if (phase === 'timeout') {
           return [
             h('h2', { key: 'title', className: 'drsb-title' }, t('title')),
             h('p', { key: 'body', className: 'drsb-body' }, t('timeout')),
+            info !== undefined && typeof info.log === 'string'
+              ? h('p', { key: 'log', className: 'drsb-log' }, t('logHint', { path: info.log }))
+              : null,
             h('div', { key: 'actions', className: 'drsb-actions' },
               h('button', {
                 type: 'button', className: 'drsb-secondary',
@@ -256,6 +284,9 @@ window.__ModuleLoader__.load({
           return [
             h('h2', { key: 'title', className: 'drsb-title' }, t('title')),
             h('p', { key: 'error', className: 'drsb-error' }, t('error', { message: failure })),
+            info !== undefined && typeof info.log === 'string'
+              ? h('p', { key: 'log', className: 'drsb-log' }, t('logHint', { path: info.log }))
+              : null,
             h('div', { key: 'actions', className: 'drsb-actions', style: { marginTop: '12px' } },
               h('button', {
                 type: 'button', className: 'drsb-secondary',
@@ -294,7 +325,7 @@ window.__ModuleLoader__.load({
           ? h('section', {
             key: 'panel',
             className: 'drsb-panel',
-            style: { right: anchor.right, bottom: anchor.bottom },
+            style: { left: anchor.left, width: anchor.width, bottom: anchor.bottom },
             role: 'dialog',
             'aria-label': t('title'),
           }, ...panel().filter(Boolean))
@@ -306,6 +337,7 @@ window.__ModuleLoader__.load({
           'aria-label': t('aria'),
           title: wide ? undefined : `${t('aria')}${versionText !== undefined ? ` · ${versionText}` : ''}`,
           'aria-expanded': open,
+          'data-open': open || undefined,
           onClick: () => {
             setPhase((current) => {
               if (current === 'idle') return 'confirm'

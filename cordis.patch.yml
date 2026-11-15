@@ -2,4 +2,4 @@
     - id: restart-button
       name: '@local/dsh-restart-button'
       config:
-        delayMs: 2500
+        delayMs: 400

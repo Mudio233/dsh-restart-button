@@ -7,15 +7,17 @@
  * - `GET /dsh-restart/info`    identity of the running host: version, pid.
  * - `POST /dsh-restart/restart` confirmed restart request.
  *
- * The restart never kills this process from inside itself. It starts a small
- * launcher detached, so the launcher survives the process it is about to
- * terminate: it waits, kills this application, waits again, starts it again,
- * and starts it a second time if the first attempt did not survive.
+ * The restart never kills this process from inside itself. It starts a launcher
+ * that outlives the process it is about to terminate: the launcher waits, ends
+ * every process of this executable, waits again, starts the shell, and retries
+ * once when the first attempt did not survive. Every step is logged to a temp
+ * file, because a silent failure here leaves no window to inspect.
  */
 import { spawn } from 'node:child_process'
 import { readFile, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { tmpdir } from 'node:os'
 
 /** Cordis function-plugin name. */
@@ -28,8 +30,28 @@ const RESTART_PATH = '/dsh-restart/restart'
 /** Request bodies here are one tiny JSON object; anything larger is hostile. */
 const MAX_BODY_BYTES = 8 * 1024
 const STARTED_AT = Date.now()
-/** Seconds to wait before killing this process, so the response flushes first. */
-const DEFAULT_DELAY_MS = 2500
+/** Milliseconds to wait before the kill, so the accepted response flushes first. */
+const DEFAULT_DELAY_MS = 400
+const PACKAGE_DIR = dirname(fileURLToPath(import.meta.url))
+/** Read on every restart, so a launcher fix needs no Host restart. */
+const LAUNCHER_TEMPLATE = join(PACKAGE_DIR, 'launcher.windows.ps1')
+/** What the launcher wrote, and the only evidence when no window appears. */
+const LOG_PATH = join(tmpdir(), 'dsh-restart.log')
+
+/**
+ * Inline copy of launcher.windows.ps1, used only when that file is missing.
+ * Keep the two in step when changing either.
+ */
+const FALLBACK_LAUNCHER = [
+  "$ErrorActionPreference = 'SilentlyContinue'",
+  "Add-Content -LiteralPath '{{LOG}}' -Value ('{0:yyyy-MM-dd HH:mm:ss.fff} launcher start' -f (Get-Date))",
+  'Start-Sleep -Milliseconds {{DELAY_MS}}',
+  "Get-Process | Where-Object { $_.Path -eq '{{EXE}}' } | Stop-Process -Force",
+  'Start-Sleep -Seconds 2',
+  'Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue',
+  "Start-Process -FilePath '{{EXE}}' -WorkingDirectory (Split-Path -Parent '{{EXE}}')",
+  '',
+].join('\r\n')
 
 /** REST response with no caching: identity is a live fact. */
 function sendJson(res, status, payload) {
@@ -114,25 +136,37 @@ function delayOf(config) {
  * of the parent's console and needs no quoting of its own, because base64
  * carries no spaces or quotes.
  *
+ * The script body comes from `launcher.windows.ps1` on disk, read per request,
+ * so a launcher fix applies without restarting the Host.
+ *
  * @param delayMs - milliseconds between launcher start and the kill.
  * @returns the command, arguments, spawn options, and the script path on POSIX.
  */
 async function planLauncher(delayMs) {
   const exe = process.execPath
   if (process.platform === 'win32') {
-    // Single-quoted PowerShell literals: a quote inside a path is doubled.
-    const literal = exe.replace(/'/g, "''")
-    const script = [
-      "$ErrorActionPreference = 'SilentlyContinue'",
-      `Start-Sleep -Milliseconds ${String(delayMs)}`,
-      `Get-Process | Where-Object { $_.Path -eq '${literal}' } | Stop-Process -Force`,
-      'Start-Sleep -Seconds 2',
-      `Start-Process -FilePath '${literal}'`,
-      'Start-Sleep -Seconds 8',
-      `if (-not (Get-Process | Where-Object { $_.Path -eq '${literal}' })) { Start-Process -FilePath '${literal}' }`,
-      '',
-    ].join('\r\n')
+    const template = await readFile(LAUNCHER_TEMPLATE, 'utf8').catch(() => FALLBACK_LAUNCHER)
+    // `cmd` refuses a command line over 8191 characters and this payload travels
+    // inside one, as UTF-16 base64 (2.67 characters per source character), so the
+    // comments that make the template readable must not be sent with it.
+    const packed = template
+      .split(/\r?\n/)
+      .map((line) => line.trimEnd())
+      .filter((line) => line !== '' && !line.trimStart().startsWith('#'))
+      .join('\r\n')
+    // Placeholders sit inside single-quoted PowerShell literals: a quote in a
+    // path is doubled, and nothing else in these values needs escaping.
+    const quote = (value) => value.replace(/'/g, "''")
+    const script = packed
+      .split('{{EXE}}').join(quote(exe))
+      .split('{{LOG}}').join(quote(LOG_PATH))
+      .split('{{DELAY_MS}}').join(String(delayMs))
     const encoded = Buffer.from(script, 'utf16le').toString('base64')
+    // A payload that no longer fits is a defect in this file, not a runtime
+    // condition: report it instead of letting `cmd` fail silently.
+    if (encoded.length > 7800) {
+      throw new Error(`launcher payload is ${String(encoded.length)} characters; the cmd hop accepts under 7800`)
+    }
     return {
       command: process.env.ComSpec ?? 'cmd.exe',
       args: ['/d', '/s', '/c', `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${encoded}`],
@@ -226,6 +260,7 @@ export function apply(ctx, config) {
         startedAt: STARTED_AT,
         origin: originOf() ?? null,
         route: RESTART_PATH,
+        log: LOG_PATH,
       })
     },
   }), `restart-button: GET ${INFO_PATH}`)
